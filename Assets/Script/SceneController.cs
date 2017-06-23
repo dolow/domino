@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Assertions;
+using UnityEngine.UI;
 
 public class SceneController : MonoBehaviour
 {
@@ -10,24 +11,38 @@ public class SceneController : MonoBehaviour
     public GameObject field                   = null;
     public GameObject initialDomino           = null;
     public GameObject trigger                 = null;
+    public GameObject dominoCountText         = null;
 
     private GameObject currentCameraTarget = null;
     private GameObject lastDeployedDomino  = null;
     private GameObject dominoPrefab        = null;
-    private Vector3    lastCameraPos       = Vector3.zero;
+    private Vector3    lastDeployedDominoCenter = Vector3.zero;
+    private Vector3    lastCameraPos            = Vector3.zero;
 
-    #region 悪い設計ゾーン
+    private int currentRaw     = 1;
+    private int deployedCount  = 1;
+    private int activatedCount = 0;
+
+#region 悪い設計ゾーン
     public static SceneController instance = null;
-    public void SetCurrentFollowee(GameObject go)
+    public void OnDominoActivated(GameObject go)
     {
-        this.currentCameraTarget = go;
+        if (go.GetComponent<Domino>().wantCameraFocus)
+            this.currentCameraTarget = go;
+        
+        this.activatedCount++;
     }
     void Start()
     {
         instance = this;
 #endregion
         this.dominoPrefab = Resources.Load<GameObject>("Prefab/Domino");
-        this.lastDeployedDomino = this.initialDomino;
+        this.lastDeployedDomino       = this.initialDomino;
+        this.lastDeployedDominoCenter = this.initialDomino.transform.position;
+
+        Domino domino = this.lastDeployedDomino.GetComponent<Domino>();
+        domino.wantCameraFocus = true;
+        domino.cameraFocusPos  = this.lastDeployedDomino.transform.position;
     }
 
     void Update()
@@ -37,6 +52,8 @@ public class SceneController : MonoBehaviour
         this.UpdateCamera();
 
         this.UpdateInput();
+
+        this.UpdateUI();
     }
 
     void PreUpdate()
@@ -50,6 +67,17 @@ public class SceneController : MonoBehaviour
 
         if (Vector3.Distance(this.lastCameraPos, this.mainCamera.transform.position) > 0.01f)
             return;
+
+        if (Input.GetKeyDown(KeyCode.T)) {
+            this.Trigger();
+        
+        }
+        else if (Input.GetKeyDown(KeyCode.UpArrow)) {
+            this.currentRaw++;
+        }
+        else if (Input.GetKeyDown(KeyCode.DownArrow)) {
+            this.currentRaw--;
+        }
 
         Camera camera = this.mainCamera.GetComponent<Camera>();
 
@@ -75,28 +103,75 @@ public class SceneController : MonoBehaviour
         MeshCollider collider = this.field.GetComponent<MeshCollider>();
 
         if (collider.Raycast(ray, out hit, 10.0f)) {
-            float fixedDistance = 0.05f;
-
             Vector3 desiredPos = new Vector3(0.0f, 0.01f, 0.0f) + hit.point;
+            this.DeployDomino(desiredPos);
+        }
+    }
 
-            Transform lastDominoTransform = this.lastDeployedDomino.transform;
-            Vector3   lastDominoPos       = lastDominoTransform.position;
+    private void UpdateUI()
+    {
+        Assert.IsNotNull(this.dominoCountText);
 
-            float distance = Vector3.Distance(desiredPos, lastDominoPos);
+        Text text = this.dominoCountText.GetComponent<Text>();
+        text.text = this.activatedCount + " / " + this.deployedCount;
+    }
 
-            if (distance < fixedDistance)
-                return;
+    private void DeployDomino(Vector3 desiredPos)
+    {
+        float fixedDistance    = 0.075f;
+        float fixedRawDistance = 0.15f;
 
-            Vector3 lastDominoRotEuler = lastDominoTransform.rotation.eulerAngles;
+        Transform lastDominoTransform = this.lastDeployedDomino.transform;
+        Vector3   lastDominoPos       = this.lastDeployedDominoCenter;
 
-            Vector3 rel = (desiredPos - lastDominoPos) * (fixedDistance / distance);
-            desiredPos = lastDominoPos + rel;
+        float distance = Vector3.Distance(desiredPos, lastDominoPos);
 
-            lastDominoRotEuler.y = Quaternion.LookRotation(desiredPos - lastDominoPos).eulerAngles.y;
-            lastDominoTransform.rotation = Quaternion.Euler(lastDominoRotEuler);
+        if (distance < fixedDistance)
+            return;
 
-            this.lastDeployedDomino = Instantiate<GameObject>(this.dominoPrefab, desiredPos, lastDominoTransform.rotation);
-            this.currentCameraTarget = this.lastDeployedDomino;
+        Vector3 lastDominoRotEuler = lastDominoTransform.rotation.eulerAngles;
+
+        Vector3 rel = (desiredPos - lastDominoPos) * (fixedDistance / distance);
+        desiredPos = lastDominoPos + rel;
+        desiredPos.y = 0.05f;
+
+        lastDominoRotEuler.y = Quaternion.LookRotation(desiredPos - lastDominoPos).eulerAngles.y;
+        lastDominoTransform.rotation = Quaternion.Euler(lastDominoRotEuler);
+
+        this.lastDeployedDominoCenter = desiredPos;
+
+        bool hasFocused = false;
+        for (int i = 1; i <= this.currentRaw; i++) {
+            GameObject dominoObj = Instantiate<GameObject>(this.dominoPrefab, desiredPos, lastDominoTransform.rotation);;
+            Vector3 right = dominoObj.transform.right * fixedRawDistance;
+            Vector3 relRight = right * ((this.currentRaw - 1) * 0.5f) - right * ((i - 1) * 0.5f);
+            relRight += (-dominoObj.transform.right * fixedRawDistance / 2) * ((this.currentRaw - 1) * 0.5f);
+            dominoObj.transform.position = dominoObj.transform.position + relRight;
+
+            this.lastDeployedDomino = dominoObj;
+            this.deployedCount++;
+
+            Domino domino = dominoObj.GetComponent<Domino>();
+            domino.wantCameraFocus = false;
+
+            // odd
+            if (!hasFocused) {
+                if (this.currentRaw % 2 == 1) {
+                    if (this.currentRaw == 1 || (i == ((this.currentRaw - 1) / 2))) {
+                        domino.wantCameraFocus = true;
+                        this.currentCameraTarget = this.lastDeployedDomino;
+                    }
+                }
+                // even
+                else if (this.currentRaw % 2 == 0) {
+                    if (i == (this.currentRaw / 2)) {
+                        domino.wantCameraFocus = true;
+                        this.currentCameraTarget = this.lastDeployedDomino;
+                    }
+                }
+            }
+
+            domino.cameraFocusPos = desiredPos;
         }
     }
 
@@ -125,7 +200,7 @@ public class SceneController : MonoBehaviour
         }
         // deploy mode
         else {
-            Vector3 cameraDestPos = targetPos + new Vector3(1.15f, 0.0f, 1.15f);
+            Vector3 cameraDestPos = this.currentCameraTarget.GetComponent<Domino>().cameraFocusPos + new Vector3(1.15f, 0.0f, 1.15f);
             cameraDestPos.y = cameraCurrentPos.y;
             this.mainCamera.transform.position = Vector3.Lerp(cameraCurrentPos, cameraDestPos, 0.1f);
         }
@@ -140,7 +215,7 @@ public class SceneController : MonoBehaviour
             return;
 
         this.currentCameraTarget = this.initialDomino;
-        Debug.Log(this.initialDomino.transform.position);
+
         this.trigger.SetActive(true);
 
         StartCoroutine(TriggerRoutine());
